@@ -50,6 +50,7 @@ filelock = "*"
 
 [environments]
 rldx = ["rldx"]
+rldx-sm100 = ["rldx-sm100"]
 inference = ["inference"]
 
 [feature.rldx.dependencies]
@@ -131,6 +132,89 @@ cmd = "pip install -e . --no-deps"
 
 [feature.rldx.activation]
 env = { TORCH_CUDA_ARCH_LIST = "sm_120" }
+
+
+# ---------------------------------------------------------------------------
+# Datacenter Blackwell environment (B200 / sm_100).
+#
+# Mirrors ``rldx`` above — same CUDA 12.8 toolkit, same torch 2.8.0+cu128
+# wheel — and differs only in the compute capability the flash-attn source
+# build targets. B200 is ``sm_100``, NOT the ``sm_120`` of consumer
+# Blackwell (RTX 5090): the two are separate CUBIN targets and kernels
+# built for one do not run on the other.
+#
+# Why not the uv path: the cu126 wheel that ``uv sync`` installs stops at
+# ``sm_90`` (Hopper), so every CUDA launch on a B200 dies with
+# "no kernel image is available for execution on the device" — in practice
+# at the first NCCL barrier in ``rldx/data/dataset/factory.py``, which
+# makes it look like a data bug rather than an environment one. The cu128
+# wheel used here ships sm_100 CUBINs natively, so only flash-attn needs
+# a source build.
+#
+# Use ``pixi run -e rldx-sm100 <cmd>`` to invoke.
+# ---------------------------------------------------------------------------
+
+[feature.rldx-sm100.dependencies]
+cuda-toolkit = "12.8.*"
+
+[feature.rldx-sm100.pypi-options]
+extra-index-urls = ["https://download.pytorch.org/whl/cu128"]
+index-strategy = "unsafe-best-match"
+
+[feature.rldx-sm100.pypi-dependencies]
+# Keep this list synced with ``[feature.rldx.pypi-dependencies]``.
+torch = { version = "==2.8.0", index = "https://download.pytorch.org/whl/cu128" }
+torchvision = { version = "==0.23.0", index = "https://download.pytorch.org/whl/cu128" }
+torchcodec = "==0.7.0"
+transformers = "==4.57.0"
+peft = "==0.17.1"
+diffusers = "==0.35.1"
+einops = "==0.8.1"
+numpy = "==1.26.4"
+scipy = "==1.15.3"
+omegaconf = "==2.3.0"
+termcolor = "==3.2.0"
+albumentations = "==1.4.18"
+dm-tree = "==0.1.8"
+pyzmq = "==27.0.1"
+msgpack = "==1.1.0"
+msgpack-numpy = "==0.4.8"
+tyro = "==0.9.17"
+pandas = "==2.2.3"
+av = "==15.0.0"
+click = "==8.1.8"
+lmdb = "==1.7.5"
+matplotlib = "==3.10.1"
+datasets = "==3.6.0"
+gymnasium = "==1.2.2"
+wandb = "==0.23.0"
+deepspeed = "==0.17.6"
+moviepy = "==1.0.3"
+opencv-contrib-python-headless = "==4.11.0.86"
+accelerate = ">=0.34"
+safetensors = ">=0.4.5"
+huggingface-hub = ">=0.26"
+Pillow = ">=10.0"
+requests = ">=2.32"
+PyYAML = ">=6.0"
+packaging = ">=24.0"
+websockets = ">=13.0"
+
+# ``FLASH_ATTN_CUDA_ARCHS="100"`` is the only substantive difference from
+# the sm_120 task above — ``100`` is one of flash-attn's four supported
+# targets (default ``"80;90;100;120"``), so no patching is needed, just
+# the arch selection. Building the single arch we run cuts the build to
+# roughly a quarter of the 4-arch default.
+[feature.rldx-sm100.tasks.install-flash-attn]
+cmd = "pip install git+https://github.com/Dao-AILab/flash-attention.git@v2.8.3 --no-build-isolation"
+env = { FLASH_ATTN_CUDA_ARCHS = "100", FLASH_ATTENTION_FORCE_BUILD = "TRUE", CUDA_HOME = "$CONDA_PREFIX" }
+
+[feature.rldx-sm100.tasks.postinstall]
+depends-on = ["install-flash-attn"]
+cmd = "pip install -e . --no-deps"
+
+[feature.rldx-sm100.activation]
+env = { TORCH_CUDA_ARCH_LIST = "sm_100" }
 
 
 # ---------------------------------------------------------------------------
