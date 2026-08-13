@@ -1,4 +1,8 @@
 # Finetune datasets
+# LeRobot datasets pulled from the HF hub (`hf download ... --local-dir dataset/<name>`).
+# Re-downloadable, so keep the parquet/mp4 out of git. The hand-written
+# meta/modality.json is the only non-reproducible part — see CLAUDE.md.
+/dataset/
 /examples/GR00T-WholeBodyControl/PhysicalAI-Robotics-GR00T-X-Embodiment-Sim/
 /examples/LIBERO/libero_10_no_noops_1.0.0_lerobot/
 /examples/LIBERO/libero_goal_no_noops_1.0.0_lerobot/
