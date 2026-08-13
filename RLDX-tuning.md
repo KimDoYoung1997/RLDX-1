@@ -283,13 +283,21 @@ SMOKE=1 USE_WANDB=0 bash run_scripts/train/examples/finetune_rldx1_ffw_sh5.sh
 넣고 정답 action과 비교한다(MSE/MAE + 관절별 플롯).
 
 ```bash
-pixi run -e rldx-sm100 python rldx/eval/open_loop_eval.py \
+pixi run -e rldx-sm100 python run_scripts/eval/open_loop_eval_verbose.py \
     --model-path ckpt/rldx1/finetuned/rldx1_ft_ffw_sh5_wholebody/rldx1_ft_ffw_sh5_wholebody/checkpoint-20 \
     --dataset-path dataset/ffw_sh5_0812 \
     --embodiment-tag GENERAL_EMBODIMENT \
     --traj-ids 1 2 --action-horizon 16 --steps 64 \
-    --save-plot-path /tmp/ffw_sh5_openloop.png
+    --save-plot-path outputs/eval/openloop_ckpt20_traj1-2.png
 ```
+
+**`--save-plot-path`는 반드시 레포 안 상대경로로 줄 것.** `/tmp`는 이 서버에서
+세션이 바뀌면 통째로 사라진다(§1). `outputs/`는 이미 `.gitignore`에 있어서
+산출물을 두기에 맞고, 영구 볼륨(`/NHNHOME`) 안이라 살아남는다.
+
+래퍼(`run_scripts/eval/open_loop_eval_verbose.py`)는 상위 `rldx/eval/open_loop_eval.py`를
+그대로 호출하되 두 가지만 더 한다 — INFO 로깅을 강제로 켜고(아래 함정 2),
+피크 VRAM을 찍는다. 상위 스크립트를 직접 써도 되지만 그러면 MSE/MAE가 안 보인다.
 
 **`--modality-config-path`가 없는 게 정상이다.** `open_loop_eval.py:317`의
 `policy.get_modality_config()`가 **체크포인트에 저장된 프로세서**에서 꺼내온다.
@@ -312,18 +320,13 @@ MAE 0.142 rad ≈ 8°. 20스텝만 학습했으니 **수치는 의미 없고**, 
 
 1. **`--traj-ids 0`을 쓰지 말 것.** 에피소드 0은 상수 데이터라(§6) 정답이 평평한 직선으로
    그려지고, 모델이 고장난 것처럼 보인다. 1~6을 쓸 것.
-2. **MSE/MAE가 로그에 안 찍힌다.** `main()`이 `logging.basicConfig(level=INFO)`를 부르지만
-   그 시점엔 transformers가 이미 루트 로거를 설정해둬서 `basicConfig`가 no-op이 된다.
-   결과가 전부 `logging.info()`라 통째로 삼켜진다. `force=True`로 덮어써야 한다:
-
-   ```python
-   import logging; logging.basicConfig(level=logging.INFO, force=True)
-   from rldx.eval.open_loop_eval import ArgsConfig, main
-   import tyro; main(tyro.cli(ArgsConfig))
-   ```
-
-   이 래퍼를 **파일로 만들어서** 실행할 것. `pixi run ... python -c "..." --model-path ...`
-   형태는 인자가 제대로 전달되지 않는다.
+2. **상위 스크립트를 직접 쓰면 MSE/MAE가 안 찍힌다.** `main()`이
+   `logging.basicConfig(level=INFO)`를 부르지만 그 시점엔 transformers가 이미 루트 로거를
+   설정해둬서 `basicConfig`가 no-op이 된다. 결과가 전부 `logging.info()`라 통째로 삼켜지고,
+   플롯만 나오고 아무 일도 안 한 것처럼 보인다. `force=True`로 덮어써야 하며
+   `open_loop_eval_verbose.py`가 그걸 한다.
+   직접 쓴다면 반드시 **파일로** 만들 것 — `pixi run ... python -c "..." --model-path ...`
+   형태는 인자가 tyro까지 전달되지 않는다.
 3. **플롯이 800×21600 픽셀이다** (관절 54개 세로 스택). 뷰어에 따라 안 열리니
    `PIL`로 잘라서 보는 게 낫다.
 
