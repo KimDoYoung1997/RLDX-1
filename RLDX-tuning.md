@@ -210,6 +210,34 @@ RELATIVE로 선언하면 실제로 작동은 한다. 나중에 비교 실험은 
 
 ## 6. 데이터 자체에서 눈에 걸린 것
 
+**에피소드 0은 죽은 녹화다.** 49프레임인데 **57차원 전부가 완전한 상수**(변화폭 0.0000)다.
+`open_loop_eval`을 `--traj-ids 0`으로 돌리면 정답이 평평한 직선으로 나와서 모델이 망가진
+것처럼 보인다. 평가는 반드시 움직이는 궤적(1~6)으로 할 것.
+
+```bash
+uv run python -c "
+import pandas as pd, numpy as np
+for ep in range(7):
+    a = np.stack(pd.read_parquet(f'dataset/ffw_sh5_0812/data/chunk-000/episode_{ep:06d}.parquet')['action'].values)
+    r = a.max(0) - a.min(0)
+    print(f'ep{ep}: frames={len(a):4d} 움직인 관절={int((r>1e-4).sum()):2d}/57 최대변화폭={r.max():.4f}')
+"
+```
+
+**`head`와 `lift`는 한 번도 안 움직인다.** 7개 에피소드 전체에서 변화폭 0.0000이다.
+§3에서 제외한 결정이 데이터로 사후 검증된 셈이다 — 넣었더라도 상수를 학습했을 것이다.
+
+| 그룹 | dims | 움직인 관절 | 최대 변화폭 |
+|---|---|---|---|
+| left_arm | 7 | 7 | 1.3612 |
+| right_arm | 7 | 7 | 1.1252 |
+| left_hand | 20 | 14 | 0.9425 |
+| right_hand | 20 | 14 | 0.9425 |
+| head | 2 | **0** | **0.0000** |
+| lift | 1 | **0** | **0.0000** |
+
+손도 20개 중 14개만 움직인다. 나머지 6개는 연동 관절이거나 이 태스크에서 안 쓰인 것으로 보인다.
+
 **언어 annotation이 `"1611"`이다.** `meta/tasks.jsonl`이
 `{"task_index": 0, "task": "1611"}` 하나뿐이라, VLA가 받는 언어 조건이 자연어 지시가 아니라
 ID 문자열이다. 학습은 기계적으로 돌아가지만 언어 grounding은 의미가 없다.
@@ -226,7 +254,133 @@ horizon이 길어질수록 유효 시작 인덱스가 줄어든다.
 
 ---
 
-## 7. TODO
+## 7. 평가 (eval) 하는 법
+
+### 7.1 학습이 걸리는지 — 스모크 런
+
+`SMOKE=1`이 20스텝/batch 8로 줄여준다. `USE_WANDB=0`은 wandb 로그인 없이 돌린다.
+
+```bash
+SMOKE=1 USE_WANDB=0 bash run_scripts/train/examples/finetune_rldx1_ffw_sh5.sh
+```
+
+봐야 할 것 — loss가 **유한하고**, `grad_norm`이 폭주하지 않고, 체크포인트가 써지는가.
+20스텝짜리 loss 값 자체에는 의미가 없다.
+
+```
+{'loss': 0.8992, 'grad_norm': 3.9186, 'learning_rate': 6.227e-05}
+{'loss': 0.7331, 'grad_norm': 2.7253, 'learning_rate': 6.819e-07}
+{'train_runtime': 82.2, 'train_loss': 0.8162}
+→ ckpt/.../checkpoint-20/  (safetensors 3샤드 + processor + experiment_cfg)
+```
+
+체크포인트 경로가 `output_dir/run_name/` 으로 **한 겹 더 들어간다**:
+`ckpt/rldx1/finetuned/<CKPT_NAME>/<RUN_NAME>/checkpoint-<step>`.
+
+### 7.2 추론이 되는지 — open-loop eval
+
+`rldx/eval/open_loop_eval.py`가 서버 없이 체크포인트를 직접 로드해서, 데이터셋의 실제 관측을
+넣고 정답 action과 비교한다(MSE/MAE + 관절별 플롯).
+
+```bash
+pixi run -e rldx-sm100 python rldx/eval/open_loop_eval.py \
+    --model-path ckpt/rldx1/finetuned/rldx1_ft_ffw_sh5_wholebody/rldx1_ft_ffw_sh5_wholebody/checkpoint-20 \
+    --dataset-path dataset/ffw_sh5_0812 \
+    --embodiment-tag GENERAL_EMBODIMENT \
+    --traj-ids 1 2 --action-horizon 16 --steps 64 \
+    --save-plot-path /tmp/ffw_sh5_openloop.png
+```
+
+**`--modality-config-path`가 없는 게 정상이다.** `open_loop_eval.py:317`의
+`policy.get_modality_config()`가 **체크포인트에 저장된 프로세서**에서 꺼내온다.
+§2에서 말한 "체크포인트에 구워진다"의 실제 증거다.
+
+20스텝 체크포인트 실측 (궤적 1, 2 / 64스텝):
+
+```
+MSE for trajectory 1: 0.04118, MAE: 0.14092
+MSE for trajectory 2: 0.04224, MAE: 0.14321
+Average MSE: 0.04171, MAE: 0.14207
+[VRAM] peak allocated: 15.83 GiB
+```
+
+MAE 0.142 rad ≈ 8°. 20스텝만 학습했으니 **수치는 의미 없고**, 확인된 것은
+체크포인트 로드 → modality config 복원 → 4그룹(7/7/20/20) × horizon 16 액션 청크 생성까지
+경로가 끝까지 돈다는 사실이다.
+
+함정 셋:
+
+1. **`--traj-ids 0`을 쓰지 말 것.** 에피소드 0은 상수 데이터라(§6) 정답이 평평한 직선으로
+   그려지고, 모델이 고장난 것처럼 보인다. 1~6을 쓸 것.
+2. **MSE/MAE가 로그에 안 찍힌다.** `main()`이 `logging.basicConfig(level=INFO)`를 부르지만
+   그 시점엔 transformers가 이미 루트 로거를 설정해둬서 `basicConfig`가 no-op이 된다.
+   결과가 전부 `logging.info()`라 통째로 삼켜진다. `force=True`로 덮어써야 한다:
+
+   ```python
+   import logging; logging.basicConfig(level=logging.INFO, force=True)
+   from rldx.eval.open_loop_eval import ArgsConfig, main
+   import tyro; main(tyro.cli(ArgsConfig))
+   ```
+
+   이 래퍼를 **파일로 만들어서** 실행할 것. `pixi run ... python -c "..." --model-path ...`
+   형태는 인자가 제대로 전달되지 않는다.
+3. **플롯이 800×21600 픽셀이다** (관절 54개 세로 스택). 뷰어에 따라 안 열리니
+   `PIL`로 잘라서 보는 게 낫다.
+
+플롯 읽는 법: 파란선 = 정답, 주황선 = 예측, 빨간 점 = 추론 시점(`--action-horizon` 간격).
+빨간 점 사이 구간이 한 번의 action chunk를 open-loop로 실행한 결과다.
+
+### 7.3 서빙 루프
+
+실기 배포는 `rldx/eval/run_rldx_server.py --model-path ...`. msgpack으로
+`ping` / `get_action` / `reset` 엔드포인트를 연다. 관측 키는 `{modality}.{key}` 규약이라
+이 로봇은 `video.cam_head`, `state.left_arm`, `state.right_arm`, `state.left_hand`,
+`state.right_hand`, `annotation.human.task_description`. 자세한 건 `docs/inference_server.md`.
+
+---
+
+## 8. 배포 대상 GPU
+
+| GPU | arch | VRAM | 학습 | 추론 | 환경 |
+|---|---|---|---|---|---|
+| B200 | `sm_100` | 183 GiB | ✅ | ✅ | `pixi run -e rldx-sm100` (§1) |
+| RTX 5090 | `sm_120` | 32 GiB | ⚠️ LoRA만 | ✅ | `pixi run -e rldx` (업스트림 기본) |
+| A100 / H100 | `sm_80/90` | 40–80 GiB | ✅ | ✅ | `uv run` (업스트림 기본) |
+
+**추론은 5090에서 여유롭다 — 추정이 아니라 실측이다.** `open_loop_eval`을 배치 1로 돌리면서
+`torch.cuda.max_memory_allocated()`로 잰 값:
+
+```
+체크포인트 (bf16, 6.9B)      12.88 GiB
+추론 피크 (배치 1, 실측)      15.83 GiB
+RTX 5090 VRAM                32 GiB      → 약 2배 여유
+```
+
+가중치 12.88 GiB에 활성화가 3 GiB 남짓 붙는다. `video_length=4`(376×672 → 160×256으로
+리사이즈), `n_cog_tokens=64`, denoising 4스텝이라 활성화가 작다.
+(B200에서 잰 값이지만 bf16 경로가 동일하므로 5090도 비슷하다.)
+
+**학습은 5090에서 빠듯하다.** full fine-tune은 가중치 13 GiB + AdamW optimizer state
+(fp32 모멘텀 2개 = 파라미터당 8바이트 ≈ 55 GiB)라 32 GiB에 안 들어간다.
+5090에서 학습하려면 LoRA를 써야 한다:
+
+```bash
+--action-model-use-lora --backbone-use-lora --backbone-lora-num-layers 4
+```
+
+**5090에서 학습 스크립트를 돌릴 때는 런처를 명시할 것.** 자동 감지는 `.pixi/envs/rldx-sm100`
+유무만 보므로 5090에서는 `uv run`(cu126, sm_90까지)으로 떨어져서 실패한다:
+
+```bash
+RUN_PREFIX="pixi run -e rldx" bash run_scripts/train/examples/finetune_rldx1_ffw_sh5.sh
+```
+
+`rldx/inference/`의 가속 경로(torch.compile / CUDAGraph / Triton)를 쓸 때만
+`pixi run -e inference`(cu130)가 따로 필요하다.
+
+---
+
+## 9. TODO
 
 - **tactile을 physics 모달리티로 학습.** `modality.json`에
   `"tactile": {"left_hand": {"start": 0, "end": 45}, "right_hand": {"start": 45, "end": 90}}`을 넣고
