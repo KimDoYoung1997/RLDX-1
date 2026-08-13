@@ -41,7 +41,7 @@ if [[ "${SMOKE:-0}" == "1" ]]; then
     MAX_STEPS=20; SAVE_STEPS=20; GLOBAL_BATCH_SIZE=8; SAVE_TOTAL_LIMIT=1
 else
     # 1253 frames total — keep the run short and checkpoint often.
-    MAX_STEPS=5000; SAVE_STEPS=500; GLOBAL_BATCH_SIZE=64; SAVE_TOTAL_LIMIT=5
+    MAX_STEPS=10000; SAVE_STEPS=5000; GLOBAL_BATCH_SIZE=64; SAVE_TOTAL_LIMIT=5
 fi
 
 ARGS=(
