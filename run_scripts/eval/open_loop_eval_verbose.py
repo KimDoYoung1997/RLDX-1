@@ -28,6 +28,7 @@ episode 0 is a dead recording (all 57 dims constant across its 49 frames), so
 its ground truth plots as a flat line and the model looks broken.
 """
 
+import gc
 import logging
 from pathlib import Path
 
@@ -42,10 +43,43 @@ from rldx.eval.open_loop_eval import ArgsConfig, main  # noqa: E402
 if __name__ == "__main__":
     args = tyro.cli(ArgsConfig)
 
+    # Upstream reuses one --save-plot-path for every trajectory in the loop
+    # (open_loop_eval.py:348 -> :238), so with --traj-ids 1 2 the second
+    # trajectory silently overwrites the first. Its *default* path does
+    # interpolate the id (/tmp/open_loop_eval/traj_{id}.jpeg) — but /tmp does
+    # not survive a session on this box. Run one trajectory per call and stamp
+    # the id into the filename ourselves, so we get both properties: a distinct
+    # plot per trajectory, on the persistent volume.
     if args.save_plot_path:
-        Path(args.save_plot_path).parent.mkdir(parents=True, exist_ok=True)
-
-    main(args)
+        out = Path(args.save_plot_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        traj_ids = list(args.traj_ids)
+        peak = 0
+        for traj_id in traj_ids:
+            args.traj_ids = [traj_id]
+            args.save_plot_path = str(out.with_name(f"{out.stem}_traj{traj_id}{out.suffix}"))
+            # Each main() call builds its own RLDXPolicy. Drop the previous one
+            # before the next load, otherwise both models are resident at once
+            # and the reported peak is roughly double what a single deployed
+            # process actually needs. reset_peak_memory_stats alone is not
+            # enough — it resets the counter, not the live allocation.
+            if torch.cuda.is_available():
+                gc.collect()
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
+            main(args)
+            if torch.cuda.is_available():
+                peak = max(peak, torch.cuda.max_memory_allocated())
+            print(f"[plot] trajectory {traj_id} -> {args.save_plot_path}")
+        if torch.cuda.is_available():
+            print(f"[VRAM] peak allocated (per trajectory): {peak / 2**30:.2f} GiB")
+        raise SystemExit(0)
+    else:
+        # No path given: upstream writes to /tmp/open_loop_eval/, which is wiped
+        # between sessions. Warn rather than silently lose the output.
+        print("[warn] no --save-plot-path; upstream will write to /tmp/open_loop_eval/,")
+        print("[warn] which does not survive a session. Pass a path under outputs/.")
+        main(args)
 
     if torch.cuda.is_available():
         print(f"[VRAM] peak allocated : {torch.cuda.max_memory_allocated() / 2**30:.2f} GiB")

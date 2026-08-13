@@ -291,13 +291,20 @@ pixi run -e rldx-sm100 python run_scripts/eval/open_loop_eval_verbose.py \
     --save-plot-path outputs/eval/openloop_ckpt20_traj1-2.png
 ```
 
-**`--save-plot-path`는 반드시 레포 안 상대경로로 줄 것.** `/tmp`는 이 서버에서
-세션이 바뀌면 통째로 사라진다(§1). `outputs/`는 이미 `.gitignore`에 있어서
-산출물을 두기에 맞고, 영구 볼륨(`/NHNHOME`) 안이라 살아남는다.
+**`--save-plot-path`는 반드시 레포 안 상대경로로 줄 것.** 생략하면 상위 스크립트가
+`/tmp/open_loop_eval/traj_{traj_id}.jpeg`에 쓰는데(`open_loop_eval.py:238`),
+`/tmp`는 이 서버에서 세션이 바뀌면 통째로 사라진다(§1).
+`outputs/`는 이미 `.gitignore`에 있어 산출물을 두기 맞고, 영구 볼륨 안이라 살아남는다.
 
-래퍼(`run_scripts/eval/open_loop_eval_verbose.py`)는 상위 `rldx/eval/open_loop_eval.py`를
-그대로 호출하되 두 가지만 더 한다 — INFO 로깅을 강제로 켜고(아래 함정 2),
-피크 VRAM을 찍는다. 상위 스크립트를 직접 써도 되지만 그러면 MSE/MAE가 안 보인다.
+래퍼(`run_scripts/eval/open_loop_eval_verbose.py`)가 상위 스크립트를 그대로 호출하되
+네 가지를 더 한다:
+
+| | 왜 |
+|---|---|
+| INFO 로깅 강제 | 안 그러면 MSE/MAE가 통째로 삼켜진다 (아래 함정 2) |
+| 궤적별 파일명 | 상위 스크립트는 여러 궤적에 **같은 경로**를 재사용해 덮어쓴다 (함정 3) |
+| `gc.collect()` 후 VRAM 측정 | 궤적마다 모델을 새로 로드해서, 안 지우면 피크가 2배로 보인다 |
+| 출력 디렉터리 자동 생성 | |
 
 **`--modality-config-path`가 없는 게 정상이다.** `open_loop_eval.py:317`의
 `policy.get_modality_config()`가 **체크포인트에 저장된 프로세서**에서 꺼내온다.
@@ -306,17 +313,20 @@ pixi run -e rldx-sm100 python run_scripts/eval/open_loop_eval_verbose.py \
 20스텝 체크포인트 실측 (궤적 1, 2 / 64스텝):
 
 ```
-MSE for trajectory 1: 0.04118, MAE: 0.14092
-MSE for trajectory 2: 0.04224, MAE: 0.14321
-Average MSE: 0.04171, MAE: 0.14207
-[VRAM] peak allocated: 15.83 GiB
+MSE for trajectory 1: 0.04499, MAE: 0.14648
+MSE for trajectory 2: 0.04576, MAE: 0.14857
+[VRAM] peak allocated (per trajectory): 15.83 GiB
 ```
 
-MAE 0.142 rad ≈ 8°. 20스텝만 학습했으니 **수치는 의미 없고**, 확인된 것은
+MAE 0.146 rad ≈ 8°. 20스텝만 학습했으니 **수치는 의미 없고**, 확인된 것은
 체크포인트 로드 → modality config 복원 → 4그룹(7/7/20/20) × horizon 16 액션 청크 생성까지
 경로가 끝까지 돈다는 사실이다.
 
-함정 셋:
+**같은 체크포인트라도 실행마다 MSE가 달라진다.** 궤적 1을 다섯 번 돌린 값이
+0.0363 / 0.0387 / 0.0412 / 0.0427 / 0.0450 로 ±15% 흔들린다. flow-matching 샘플링에
+시드가 고정돼 있지 않아서다. 체크포인트끼리 비교할 때는 이 폭보다 큰 차이인지 볼 것.
+
+함정 넷:
 
 1. **`--traj-ids 0`을 쓰지 말 것.** 에피소드 0은 상수 데이터라(§6) 정답이 평평한 직선으로
    그려지고, 모델이 고장난 것처럼 보인다. 1~6을 쓸 것.
@@ -327,7 +337,11 @@ MAE 0.142 rad ≈ 8°. 20스텝만 학습했으니 **수치는 의미 없고**, 
    `open_loop_eval_verbose.py`가 그걸 한다.
    직접 쓴다면 반드시 **파일로** 만들 것 — `pixi run ... python -c "..." --model-path ...`
    형태는 인자가 tyro까지 전달되지 않는다.
-3. **플롯이 800×21600 픽셀이다** (관절 54개 세로 스택). 뷰어에 따라 안 열리니
+3. **`--save-plot-path`를 주면 궤적끼리 덮어쓴다.** 기본 경로는
+   `traj_{traj_id}.jpeg`로 id가 들어가지만, 명시하면 그 경로 하나가 루프의 모든 궤적에
+   재사용된다(`open_loop_eval.py:348` → `:238`). `--traj-ids 1 2`면 궤적 2가 궤적 1을
+   덮어써서 결과가 조용히 하나만 남는다. 래퍼는 궤적별로 `_traj{id}`를 붙여 저장한다.
+4. **플롯이 800×21600 픽셀이다** (관절 54개 세로 스택). 뷰어에 따라 안 열리니
    `PIL`로 잘라서 보는 게 낫다.
 
 플롯 읽는 법: 파란선 = 정답, 주황선 = 예측, 빨간 점 = 추론 시점(`--action-horizon` 간격).
