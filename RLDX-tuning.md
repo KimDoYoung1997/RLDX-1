@@ -354,6 +354,18 @@ pixi run -e rldx-sm100 python run_scripts/eval/open_loop_eval_verbose.py \
 | `gc.collect()` 후 VRAM 측정 | 궤적마다 모델을 새로 로드해서, 안 지우면 피크가 2배로 보인다 |
 | 출력 디렉터리 자동 생성 | |
 
+**로컬에 없는 `--model-path`는 Hub repo id로 간주된다.** `policy_loader.py:152`의
+`_resolve_model_dir`이 경로가 없으면 `snapshot_download`로 넘어간다. 그래서 공개된
+체크포인트는 그대로 쓸 수 있다:
+
+```bash
+--model-path learner1119/RLDX-1-FT-ffw-sh5
+```
+
+반대로 **로컬 경로가 사라진 경우**(대개 `--save-total-limit`이 지웠거나 오타) 그 경로가
+repo id로 넘어가서 `HFValidationError: Repo id must be in the form ...`라는 엉뚱한 에러가
+난다. 래퍼가 둘을 구분해서, 후자면 그 디렉터리에 실제로 남아 있는 체크포인트를 보여준다.
+
 **`--modality-config-path`가 없는 게 정상이다.** `open_loop_eval.py:317`의
 `policy.get_modality_config()`가 **체크포인트에 저장된 프로세서**에서 꺼내온다.
 §2에서 말한 "체크포인트에 구워진다"의 실제 증거다.
@@ -449,7 +461,27 @@ RUN_PREFIX="pixi run -e rldx" bash run_scripts/train/examples/finetune_rldx1_ffw
 
 ---
 
-## 9. TODO
+## 9. 배포한 체크포인트
+
+[`learner1119/RLDX-1-FT-ffw-sh5`](https://huggingface.co/learner1119/RLDX-1-FT-ffw-sh5) (public).
+10000스텝 체크포인트에서 **추론용 산출물만** 올렸다 — 가중치 3샤드, `processor/`,
+`experiment_cfg/`, LICENSE, 모델 카드. 총 13G.
+
+DeepSpeed 옵티마이저 상태(`global_step10000/`, 48G)는 **뺐다.** 원본 학습을 재개할 때만
+쓰이고 추론이나 추가 파인튜닝에는 필요 없다. 체크포인트 61G 중 대부분이 이것이다.
+
+**라이선스는 선택의 여지가 없다.** `RLDX-1-PT`가 RLWRLD Model License v1.0이고 파인튜닝
+결과물은 명시적으로 "Derivative Model"이라, §3.3 share-alike에 따라 **같은 라이선스로만**
+배포할 수 있다. §3.4는 라이선스 전문 사본 동봉을, §3.2는 출처 표시를 요구한다.
+MIT/Apache로 올리면 위반이다.
+
+모델 카드에는 한계를 명시했다 — 7 에피소드에 ~510 에폭이라 과적합, 언어 조건이
+placeholder `"1611"`이라 지시 이행 능력 없음, head 카메라만 사용, 손가락은 2개
+에피소드에서만 움직임. 받아 쓰는 쪽이 성능 지표로 오해하면 안 되는 물건이다.
+
+---
+
+## 10. TODO
 
 - **tactile을 physics 모달리티로 학습.** `modality.json`에
   `"tactile": {"left_hand": {"start": 0, "end": 45}, "right_hand": {"start": 45, "end": 90}}`을 넣고

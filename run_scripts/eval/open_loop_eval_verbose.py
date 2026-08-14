@@ -66,12 +66,63 @@ def _check_gpu_arch() -> None:
     )
 
 
+def _check_model_path(model_path: str) -> None:
+    """Disambiguate 'local checkpoint' from 'Hub repo id' before loading.
+
+    ``policy_loader._resolve_model_dir`` already falls back to
+    ``snapshot_download(model_path)`` when the path does not exist locally, so a
+    repo id like ``learner1119/RLDX-1-FT-ffw-sh5`` just works.
+
+    The failure mode is a *local* path that is gone — deleted by
+    ``save_total_limit``, or a typo. That gets handed to the Hub as a repo id
+    and comes back as::
+
+        HFValidationError: Repo id must be in the form 'repo_name' or
+        'namespace/repo_name': 'ckpt/rldx1/finetuned/.../checkpoint-20'
+
+    which says nothing about the real problem. Catch it here and show what does
+    exist instead.
+    """
+    p = Path(model_path)
+    if p.exists():
+        return
+    # A Hub repo id is 'name' or 'namespace/name' — at most one slash, no dots
+    # or path anchors. Anything else was meant to be a local path.
+    looks_like_repo_id = (
+        model_path.count("/") <= 1
+        and not model_path.startswith((".", "/", "~"))
+        and not p.suffix
+    )
+    if looks_like_repo_id:
+        print(f"[i] {model_path} is not a local path; downloading from the Hub.")
+        return
+
+    msg = [f"\nERROR: no checkpoint at {model_path}"]
+    parent = p.parent
+    if parent.is_dir():
+        siblings = sorted(
+            (d.name for d in parent.iterdir() if d.is_dir() and d.name.startswith("checkpoint-")),
+            key=lambda n: int(n.split("-")[-1]),
+        )
+        if siblings:
+            msg.append(f"       {parent} currently holds: {', '.join(siblings)}")
+            msg.append("       (--save-total-limit evicts older checkpoints during training)")
+        else:
+            msg.append(f"       {parent} holds no checkpoint-* directories.")
+    else:
+        msg.append(f"       {parent} does not exist either.")
+    msg.append("\n       To evaluate a published model instead, pass its repo id:")
+    msg.append("           --model-path learner1119/RLDX-1-FT-ffw-sh5\n")
+    raise SystemExit("\n".join(msg))
+
+
 from rldx.eval.open_loop_eval import ArgsConfig, main  # noqa: E402
 
 
 if __name__ == "__main__":
     _check_gpu_arch()
     args = tyro.cli(ArgsConfig)
+    _check_model_path(args.model_path)
 
     # Upstream reuses one --save-plot-path for every trajectory in the loop
     # (open_loop_eval.py:348 -> :238), so with --traj-ids 1 2 the second
