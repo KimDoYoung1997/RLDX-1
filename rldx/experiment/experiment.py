@@ -29,7 +29,7 @@ from transformers import TrainingArguments, set_seed
 import wandb
 
 from rldx.configs.base_config import Config
-from rldx.experiment.trainer import ProfCallback, RLDXTrainer
+from rldx.experiment.trainer import ProfCallback, RestoreStepCadenceCallback, RLDXTrainer
 from rldx.experiment.utils import (
     BestMetricCheckpointCallback,
     CheckpointFormatCallback,
@@ -233,6 +233,10 @@ def run(config: Config):
         data_collator=data_collator,
         multiprocessing_context=config.data.multiprocessing_context,
     )
+
+    # Must be registered before training starts: it repairs the step cadence that
+    # a resumed checkpoint would otherwise impose on this run. See the callback.
+    trainer.add_callback(RestoreStepCadenceCallback())
 
     trainer.add_callback(
         CheckpointFormatCallback(

@@ -30,6 +30,7 @@ its ground truth plots as a flat line and the model looks broken.
 
 import gc
 import logging
+import sys
 from pathlib import Path
 
 import torch
@@ -37,10 +38,39 @@ import tyro
 
 logging.basicConfig(level=logging.INFO, force=True)
 
+
+def _check_gpu_arch() -> None:
+    """Fail fast when this torch build has no kernels for the installed GPU.
+
+    Running from the uv/.venv interpreter on a B200 gets you a cu126 torch whose
+    CUBINs stop at sm_90. torch only prints a UserWarning at import, then dies
+    ~200 lines later inside the backbone with a bare "no kernel image is
+    available for execution on the device" that points at an innocent line. Cheap
+    to detect up front, so do that instead.
+    """
+    if not torch.cuda.is_available():
+        return
+    major, minor = torch.cuda.get_device_capability(0)
+    arch = f"sm_{major}{minor}"
+    supported = torch.cuda.get_arch_list()
+    if arch in supported:
+        return
+    raise SystemExit(
+        f"\nERROR: {torch.cuda.get_device_name(0)} is {arch}, but this torch "
+        f"({torch.__version__}) only ships {', '.join(supported)}.\n"
+        f"       Every CUDA launch will fail with 'no kernel image is available'.\n\n"
+        f"       You are probably running the uv/.venv python directly. Use the\n"
+        f"       pixi environment built for this GPU instead:\n\n"
+        f"           pixi run -e rldx-sm100 python {' '.join(sys.argv)}\n\n"
+        f"       See RLDX-tuning.md section 1.\n"
+    )
+
+
 from rldx.eval.open_loop_eval import ArgsConfig, main  # noqa: E402
 
 
 if __name__ == "__main__":
+    _check_gpu_arch()
     args = tyro.cli(ArgsConfig)
 
     # Upstream reuses one --save-plot-path for every trajectory in the loop

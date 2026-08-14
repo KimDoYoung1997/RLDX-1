@@ -277,6 +277,40 @@ SMOKE=1 USE_WANDB=0 bash run_scripts/train/examples/finetune_rldx1_ffw_sh5.sh
 체크포인트 경로가 `output_dir/run_name/` 으로 **한 겹 더 들어간다**:
 `ckpt/rldx1/finetuned/<CKPT_NAME>/<RUN_NAME>/checkpoint-<step>`.
 
+### 7.1.1 같은 output_dir에 두 번 실행하면 조용히 이어서 학습한다
+
+`experiment.py`가 **항상** `trainer.train(resume_from_checkpoint=True)`로 부른다.
+즉 output_dir에 체크포인트가 남아 있으면 새 학습이 아니라 **재개**다. 그것 자체는 의도된
+동작이지만, 재개 시 **CLI 인자 일부가 무시된다**는 부작용이 있다.
+
+실제로 겪은 사고: `SMOKE=1`로 20스텝을 돌린 뒤 같은 디렉터리에 `--save-steps 5000`으로
+10000스텝을 걸었더니, 체크포인트가 **20스텝마다** 저장되면서
+`--save-total-limit 5` 때문에 9920~10000만 남고 5000은 사라졌다.
+
+원인 사슬:
+
+1. `DefaultFlowCallback`은 저장 시점을 `args.save_steps`가 아니라 **`state.save_steps`**로
+   판단한다 (`transformers/trainer_callback.py`: `state.global_step % state.save_steps`).
+2. 새 학습에서는 HF가 `state.compute_steps(args, max_steps)`로 args에서 유도한다.
+3. **재개할 때는** `self.state = TrainerState.load_from_json(...)`로 상태를 통째로
+   교체하고 다시 유도하지 않는다 (`transformers/trainer.py`). 그래서 스모크 런의
+   `save_steps=20`이 그대로 살아남는다. `compare_trainer_and_checkpoint_args`는 경고만 한다.
+4. `logging_steps` / `eval_steps`도 같은 경로로 이전 값을 물려받는다.
+
+부수적으로 log_history와 step 카운터도 이어져서, 10000스텝 런의 첫 두 로그가
+스모크 런의 loss(0.8992 / 0.7331)로 남아 있었다.
+
+**대응 (둘 다 적용됨):**
+
+- `rldx/experiment/trainer.py`의 `RestoreStepCadenceCallback` — `on_train_begin`은
+  재개 시 상태 로드 **이후**에 실행되므로, 거기서 `save_steps`/`logging_steps`/`eval_steps`를
+  CLI 값으로 되돌리고 무엇을 덮어썼는지 출력한다.
+- 학습 스크립트에서 `SMOKE=1`은 `<CKPT_NAME>_smoke`라는 **별도 디렉터리**를 쓴다.
+  스모크 런이 실전 런을 오염시킬 경로 자체를 없앴다.
+- 그리고 재개가 일어날 상황이면 스크립트가 시작 시 경고한다.
+
+새 학습을 원하면 `CKPT_NAME`을 바꾸거나 기존 디렉터리를 옮길 것.
+
 ### 7.2 추론이 되는지 — open-loop eval
 
 `rldx/eval/open_loop_eval.py`가 서버 없이 체크포인트를 직접 로드해서, 데이터셋의 실제 관측을
@@ -284,12 +318,26 @@ SMOKE=1 USE_WANDB=0 bash run_scripts/train/examples/finetune_rldx1_ffw_sh5.sh
 
 ```bash
 pixi run -e rldx-sm100 python run_scripts/eval/open_loop_eval_verbose.py \
-    --model-path ckpt/rldx1/finetuned/rldx1_ft_ffw_sh5_wholebody/rldx1_ft_ffw_sh5_wholebody/checkpoint-20 \
+    --model-path ckpt/rldx1/finetuned/rldx1_ft_ffw_sh5_wholebody/rldx1_ft_ffw_sh5_wholebody/checkpoint-10000 \
     --dataset-path dataset/ffw_sh5_0812 \
     --embodiment-tag GENERAL_EMBODIMENT \
-    --traj-ids 1 2 --action-horizon 16 --steps 64 \
-    --save-plot-path outputs/eval/openloop_ckpt20_traj1-2.png
+    --traj-ids 1 2 3 4 5 6 --action-horizon 16 --steps 64 \
+    --save-plot-path outputs/eval/openloop_ckpt10000.png
 ```
+
+궤적 0은 뺀다 — 죽은 녹화라 정답이 평평하고 평균 MSE만 낮춘다(함정 1, §6).
+1~6 중에서도 **3과 6만 손가락이 움직인다**(42/57 관절). 나머지는 팔만 움직이므로,
+손 예측을 보려면 3·6의 플롯을 볼 것.
+
+| ep | frames | 움직인 관절 | 최대 변화폭 |
+|---|---|---|---|
+| 0 | 49 | **0/57** ← 죽은 녹화 | 0.0000 |
+| 1 | 200 | 14/57 (팔만) | 0.8309 |
+| 2 | 201 | 14/57 (팔만) | 1.3612 |
+| **3** | 201 | **42/57 (팔+손)** | 1.1874 |
+| 4 | 200 | 14/57 (팔만) | 0.8326 |
+| 5 | 201 | 14/57 (팔만) | 0.4671 |
+| **6** | 201 | **42/57 (팔+손)** | 1.1455 |
 
 **`--save-plot-path`는 반드시 레포 안 상대경로로 줄 것.** 생략하면 상위 스크립트가
 `/tmp/open_loop_eval/traj_{traj_id}.jpeg`에 쓰는데(`open_loop_eval.py:238`),
@@ -310,17 +358,21 @@ pixi run -e rldx-sm100 python run_scripts/eval/open_loop_eval_verbose.py \
 `policy.get_modality_config()`가 **체크포인트에 저장된 프로세서**에서 꺼내온다.
 §2에서 말한 "체크포인트에 구워진다"의 실제 증거다.
 
-20스텝 체크포인트 실측 (궤적 1, 2 / 64스텝):
+실측 (궤적 1, 2 / 64스텝):
 
-```
-MSE for trajectory 1: 0.04499, MAE: 0.14648
-MSE for trajectory 2: 0.04576, MAE: 0.14857
-[VRAM] peak allocated (per trajectory): 15.83 GiB
-```
+| 체크포인트 | 궤적 1 MSE / MAE | 궤적 2 MSE / MAE |
+|---|---|---|
+| 20스텝 (스모크) | 0.04499 / 0.14648 | 0.04576 / 0.14857 |
+| **10000스텝** | **0.00718 / 0.03328** | **0.00727 / 0.03133** |
 
-MAE 0.146 rad ≈ 8°. 20스텝만 학습했으니 **수치는 의미 없고**, 확인된 것은
-체크포인트 로드 → modality config 복원 → 4그룹(7/7/20/20) × horizon 16 액션 청크 생성까지
-경로가 끝까지 돈다는 사실이다.
+`[VRAM] peak allocated (per trajectory): 15.83 GiB` (둘 다 동일).
+
+MSE가 6배 넘게 줄었고 MAE는 0.146 rad(≈8°) → 0.033 rad(≈**1.9°**)로 떨어졌다.
+아래에 적은 실행 간 변동폭(±15%)보다 훨씬 큰 차이라 노이즈가 아니다.
+플롯에서도 예측이 정답 곡선을 따라간다 — 20스텝 때 제멋대로 방황하던 것과 대비된다.
+
+다만 10000스텝은 1253프레임에 대해 약 510 에폭이라 과적합 구간이다.
+"학습·추론 경로가 도는가"를 확인하는 데는 충분하지만 정책 성능의 근거는 못 된다.
 
 **같은 체크포인트라도 실행마다 MSE가 달라진다.** 궤적 1을 다섯 번 돌린 값이
 0.0363 / 0.0387 / 0.0412 / 0.0427 / 0.0450 로 ±15% 흔들린다. flow-matching 샘플링에

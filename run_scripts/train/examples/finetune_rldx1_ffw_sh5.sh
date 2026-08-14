@@ -33,15 +33,33 @@ BASE_DIR="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 EMBODIMENT_TAG="GENERAL_EMBODIMENT"
 DATASET_PATH="${DATASET_PATH:-$BASE_DIR/dataset/ffw_sh5_0812}"
 MODALITY_CONFIG_PATH="$BASE_DIR/rldx/configs/data/ffw_sh5_rev1_config_wholebody.py"
-CKPT_DIR="$BASE_DIR/ckpt/rldx1/finetuned/$CKPT_NAME"
+# CKPT_DIR is set after the sizing block below — SMOKE=1 changes CKPT_NAME.
 
 # Run sizing. SMOKE=1 shrinks the run to ~20 steps just to prove the pipeline
 # assembles, the loss is finite, and a checkpoint gets written.
+#
+# The smoke run gets its OWN output dir. experiment.py always calls
+# trainer.train(resume_from_checkpoint=True), so a leftover checkpoint in the
+# real run's directory would be silently resumed — inheriting the smoke run's
+# step counter, log history and save cadence. Keeping the directories apart
+# means a smoke run can never contaminate a real one.
 if [[ "${SMOKE:-0}" == "1" ]]; then
     MAX_STEPS=20; SAVE_STEPS=20; GLOBAL_BATCH_SIZE=8; SAVE_TOTAL_LIMIT=1
+    CKPT_NAME="${CKPT_NAME}_smoke"
+    RUN_NAME="$CKPT_NAME"
 else
     # 1253 frames total — keep the run short and checkpoint often.
     MAX_STEPS=10000; SAVE_STEPS=5000; GLOBAL_BATCH_SIZE=64; SAVE_TOTAL_LIMIT=5
+fi
+CKPT_DIR="$BASE_DIR/ckpt/rldx1/finetuned/$CKPT_NAME"
+
+# Resuming is deliberate (experiment.py passes resume_from_checkpoint=True), but
+# it should never be a surprise. Say so up front.
+if compgen -G "$CKPT_DIR/$RUN_NAME/checkpoint-*" >/dev/null; then
+    _last=$(ls -d "$CKPT_DIR/$RUN_NAME"/checkpoint-* 2>/dev/null | sed 's/.*checkpoint-//' | sort -n | tail -1)
+    echo "[!] $CKPT_DIR/$RUN_NAME already holds checkpoints (latest: $_last)."
+    echo "[!] This run will RESUME from it, not start fresh."
+    echo "[!] For a fresh run, set CKPT_NAME=<something-new> or move the directory."
 fi
 
 ARGS=(

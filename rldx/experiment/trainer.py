@@ -45,6 +45,47 @@ from transformers.trainer_utils import EvalPrediction
 from rldx.utils.dist import rank_zero_print as _print
 
 
+class RestoreStepCadenceCallback(TrainerCallback):
+    """Make ``--save-steps`` / ``--logging-steps`` / ``--eval-steps`` win over a
+    resumed checkpoint's state.
+
+    ``DefaultFlowCallback`` decides when to checkpoint from ``state.save_steps``,
+    not ``args.save_steps`` (``trainer_callback.py``: ``state.global_step %
+    state.save_steps``). On a fresh run HF derives that from args via
+    ``state.compute_steps(args, max_steps)``. On resume it instead replaces the
+    whole state with the checkpoint's (``trainer.py``: ``self.state =
+    TrainerState.load_from_json(...)``) and never re-derives, so the *previous*
+    run's cadence silently wins for the whole run.
+
+    That bites here because ``experiment.py`` always calls
+    ``trainer.train(resume_from_checkpoint=True)``: a 20-step SMOKE run leaves a
+    checkpoint whose ``save_steps=20``, and the next real run in the same
+    output_dir then checkpoints every 20 steps regardless of the CLI. With
+    ``save_total_limit`` that also evicts every earlier checkpoint, so a
+    10k-step run ends up keeping only steps 9920-10000.
+
+    ``on_train_begin`` fires after the resume-time state load, so re-applying the
+    args here is enough.
+    """
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        for field in ("save_steps", "logging_steps", "eval_steps"):
+            from_args = getattr(args, field, None)
+            from_state = getattr(state, field, None)
+            # args values below 1 are ratios of max_steps; compute_steps already
+            # resolved those into state on the fresh-state path, so only override
+            # with absolute values.
+            if from_args is None or (isinstance(from_args, float) and from_args < 1):
+                continue
+            if from_state != from_args:
+                _print(
+                    f"[i] {field}: restoring {from_args} from CLI "
+                    f"(resumed checkpoint carried {from_state})"
+                )
+                setattr(state, field, from_args)
+        return control
+
+
 class ProfCallback(TrainerCallback):
     def __init__(self, prof):
         self.prof = prof
