@@ -12,7 +12,7 @@
 #
 # Usage:
 #   bash run_scripts/eval/eval_holdout_all.sh                    # defaults below
-#   STEPS="10000 20000" ACTION_HORIZON=16 bash .../eval_holdout_all.sh
+#   STEPS="10000 20000" EVAL_STEPS=128 bash .../eval_holdout_all.sh   # EVAL_STEPS: frames per episode (default 1000 = full)
 
 set -uo pipefail
 
@@ -63,7 +63,7 @@ for STEP in $STEPS; do
         --embodiment-tag GENERAL_EMBODIMENT \
         --traj-ids $TRAJ_IDS \
         --action-horizon "$ACTION_HORIZON" \
-        --steps 128 \
+        --steps "${EVAL_STEPS:-1000}" \
         --save-plot-path "$OUT_DIR/holdout_${STEP}.png" > "$LOG" 2>&1
     # NOTE: do not read the log's "Average MSE across all trajs" line — it is
     # printed once per trajectory and each print covers only what that call has
