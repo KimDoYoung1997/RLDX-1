@@ -9,7 +9,7 @@ eval appears to do nothing but write a plot. ``force=True`` overrides the
 existing handler configuration.
 
 Also prints peak VRAM, which is the number you want when sizing a deployment
-GPU (see RLDX-tuning.md section 8).
+GPU (see RLDX-1-FFW-SH5.md appendix A.6).
 
 Usage mirrors the upstream script:
 
@@ -62,7 +62,7 @@ def _check_gpu_arch() -> None:
         f"       You are probably running the uv/.venv python directly. Use the\n"
         f"       pixi environment built for this GPU instead:\n\n"
         f"           pixi run -e rldx-sm100 python {' '.join(sys.argv)}\n\n"
-        f"       See RLDX-tuning.md section 1.\n"
+        f"       See RLDX-1-FFW-SH5.md appendix A.6.\n"
     )
 
 
