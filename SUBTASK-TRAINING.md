@@ -89,3 +89,15 @@ bash run_scripts/eval/eval_holdout_all.sh
   앞 20 step(2초)만 실행하고 재질의하므로 경계 노출은 최대 2초로 제한된다.
 - 비교 기준: 베이스라인 ckpt-10000, held-out MSE 0.0239 (전체 궤적, horizon 40).
   판정은 평균이 아니라 에피소드별 짝비교(±15% 샘플링 노이즈).
+
+## 결과 (26.09.03 실측)
+
+세 run 모두 open-loop MSE 동률: RLDX 0.0239→0.0241, GR00T ABS 0.0297→0.0308,
+GR00T relarm 0.0236→0.0239 (각 최적 ckpt, 짝비교 5/9·3/9·5/9).
+
+언어 민감도 프로브(remap_task_index.py로 만든 오답/전체문장 holdout 변형):
+GR00T ABS는 오답 라벨에 +11%(9/9 악화)로 반응, relarm +7%, **RLDX는 ±0% —
+subtask 문장을 완전히 무시한다.** 문장이 시각 상태와 완벽 상관이라 시각이
+지름길이 된 것. 시퀀서 제어가 필요하면 "같은 장면·다른 명령" 데이터가 선행
+조건이고, 그 전까지 배포는 whole-sentence로 충분하다.
+자세한 요약: FFW-SH5-0826-briefing.md의 26.09.03 섹션.
