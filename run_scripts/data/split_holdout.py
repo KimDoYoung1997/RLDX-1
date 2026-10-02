@@ -73,7 +73,7 @@ def _write_part(src: Path, out: Path, episodes: list[int], info: dict) -> dict:
             d.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(s, d)
 
-        eps_out.append({"episode_index": new_ei, "tasks": ep["tasks"], "length": n})
+        eps_out.append({**ep, "episode_index": new_ei, "length": n})
         st = dict(src_stats[old_ei]["stats"])
         st["episode_index"] = _stats_of(np.full(n, new_ei, dtype=np.int64))
         st["index"] = _stats_of(np.arange(frame_cursor, frame_cursor + n, dtype=np.int64))
