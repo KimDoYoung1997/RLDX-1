@@ -70,7 +70,7 @@ for STEP in $STEPS; do
     # seen, so the last one is the final trajectory's score, not the mean.
     # Average the per-trajectory lines instead.
     read -r MSE MAE < <(grep -oE "MSE for trajectory [0-9]+: [0-9.]+, MAE: [0-9.]+" "$LOG" \
-        | awk -F'[:,]' '{m+=$3; a+=$5; n++} END {if(n) printf "%.6f %.6f", m/n, a/n}')
+        | awk -F'[:,]' '{m+=$2; a+=$4; n++} END {if(n) printf "%.6f %.6f", m/n, a/n}')
     printf "checkpoint-%-6s  MSE %-12s  MAE %-12s\n" "$STEP" "${MSE:-FAILED}" "${MAE:-FAILED}" \
         | tee -a "$SUMMARY"
 done
