@@ -6,7 +6,10 @@ frames at 10 fps, halves the subtask segment boundaries, recomputes the
 per-episode stats and sets fps=10 in info.json. No stats.json is written
 (the trainers generate it from the data, as for the 20 fps splits).
 
-    python downsample_10hz.py SRC DST [workers]
+    python downsample_10hz.py SRC DST [workers] [phase]
+
+phase 0 keeps frames 0, 2, 4, ... (default); phase 1 keeps 1, 3, 5, ... — the
+two phases of one 20 fps episode are two 10 fps episodes offset by 50 ms.
 """
 import json, math, os, shutil, subprocess, sys
 from concurrent.futures import ProcessPoolExecutor
@@ -17,6 +20,8 @@ import pyarrow.parquet as pq
 
 SRC, DST = sys.argv[1], sys.argv[2]
 WORKERS = int(sys.argv[3]) if len(sys.argv) > 3 else 12
+PHASE = int(sys.argv[4]) if len(sys.argv) > 4 else 0
+assert PHASE in (0, 1)
 FPS_IN, FPS_OUT = 20, 10
 VKEY = "observation.images.cam_head"
 
@@ -25,9 +30,14 @@ def rl(p):
     return [json.loads(l) for l in open(p) if l.strip()]
 
 
+def new_idx(f):
+    # number of kept frames (PHASE, PHASE+2, ...) strictly before original frame f
+    return max(0, math.ceil((f - PHASE) / 2))
+
+
 def half_segments(segs):
-    # half-open [start, end): the first kept frame >= start is ceil(start/2)
-    return [{**s, "start": math.ceil(s["start"] / 2), "end": math.ceil(s["end"] / 2)} for s in segs]
+    # half-open [start, end) on the original frames -> the kept frames inside it
+    return [{**s, "start": new_idx(s["start"]), "end": new_idx(s["end"])} for s in segs]
 
 
 def nb_frames(path):
@@ -44,7 +54,7 @@ def do_episode(job):
     assert t.num_rows == n_src, (ei, t.num_rows, n_src)
     fi = t.column("frame_index").to_numpy()
     assert (fi == np.arange(n_src)).all(), ei
-    keep = np.arange(0, n_src, 2)
+    keep = np.arange(PHASE, n_src, 2)
     n = len(keep)
     t = t.take(pa.array(keep))
     def put(tab, name, arr):
@@ -60,7 +70,7 @@ def do_episode(job):
     vout = f"{DST}/videos/chunk-000/{VKEY}/episode_{ei:06d}.mp4"
     assert nb_frames(vin) == n_src, (ei, "src video frames != parquet rows")
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", vin,
-                    "-vf", "select='not(mod(n,2))',setpts=N/(10*TB)",
+                    "-vf", f"select='eq(mod(n,2),{PHASE})',setpts=N/(10*TB)",
                     "-r", str(FPS_OUT), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
                     "-g", "20", "-an", vout], check=True)
     nv = nb_frames(vout)
@@ -83,7 +93,7 @@ def main():
     eps = rl(f"{SRC}/meta/episodes.jsonl")
     jobs, off = [], 0
     for e in eps:
-        n_new = math.ceil(e["length"] / 2)
+        n_new = len(range(PHASE, e["length"], 2))
         jobs.append((e["episode_index"], e["length"], off))
         off += n_new
     with ProcessPoolExecutor(WORKERS) as ex:
