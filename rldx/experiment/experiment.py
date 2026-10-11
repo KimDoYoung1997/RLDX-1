@@ -238,6 +238,11 @@ def run(config: Config):
     # a resumed checkpoint would otherwise impose on this run. See the callback.
     trainer.add_callback(RestoreStepCadenceCallback())
 
+    # Opt-in held-out loss curve (RLDX_VAL_DATASET); no-op when the env var is unset.
+    from rldx.experiment.val_loss import maybe_add_heldout_loss_callback
+
+    maybe_add_heldout_loss_callback(trainer, config, processor, output_dir, log=_print)
+
     trainer.add_callback(
         CheckpointFormatCallback(
             run_name=experiment_name,
